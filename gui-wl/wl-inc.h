@@ -51,6 +51,7 @@ struct Wlwin {
 	struct wl_compositor *compositor;
 	struct wl_display *display;
 	struct wl_surface *surface;
+	struct wl_surface *surfaceover;
 	struct wl_surface *cursorsurface;
 	struct xdg_wm_base *xdg_wm_base;
 	struct xdg_toplevel *xdg_toplevel;
@@ -75,8 +76,7 @@ struct Wlwin {
 	struct zwp_primary_selection_device_manager_v1 *primsel;
 	struct zwp_primary_selection_device_v1 *primsel_device;
 
-	struct zwlr_virtual_pointer_manager_v1 *vpmgr;
-	struct zwlr_virtual_pointer_v1 *vpointer;
+	struct zwp_pointer_constraints_v1 *constraints;
 };
 
 void wlallocbuffer(Wlwin*);

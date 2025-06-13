@@ -19,7 +19,7 @@
 #include "xdg-shell-protocol.h"
 #include "xdg-decoration-protocol.h"
 #include "xdg-primary-selection-protocol.h"
-#include "wlr-virtual-pointer.h"
+#include "wp-pointer-constraints.h"
 
 #include "screen.h"
 #include "wl-inc.h"
@@ -328,7 +328,11 @@ pointer_handle_button(void *data, struct wl_pointer *pointer, uint32_t serial, u
 	Wlwin *wl;
 	int m;
 
+	/* ignore buttons on the window decor */
 	wl = data;
+	if (wl->surface != wl->surfaceover)
+		return;
+
 	switch(button){
 	case BTN_LEFT: m = P9Mouse1; break;
 	case BTN_MIDDLE: m = P9Mouse2; break;
@@ -351,7 +355,11 @@ pointer_handle_motion(void *data, struct wl_pointer *wl_pointer, uint32_t time, 
 {
 	Wlwin *wl;
 
+	/* ignore motion on the window decor */
 	wl = data;
+	if (wl->surface != wl->surfaceover)
+		return;
+
 	wl->mouse.xy.x = surface_x / 256;
 	wl->mouse.xy.y = surface_y / 256;
 	wl->mouse.msec = time;
@@ -365,11 +373,13 @@ pointer_handle_enter(void *data, struct wl_pointer *wl_pointer, uint32_t serial,
 
 	wl = data;
 	wl->pointerserial = serial;
-	pointer_handle_motion(data, wl_pointer, wl->mouse.msec, surface_x, surface_y);
+	/* track surface so we can ignore events for the window decor */
+	wl->surfaceover = surface;
+	if (wl->surface != wl->surfaceover)
+		return;
 
-	/* let libdecor handle the cursor for it's surfaces */
-	if (wl->surface == surface)
-		setcursor();
+	pointer_handle_motion(data, wl_pointer, wl->mouse.msec, surface_x, surface_y);
+	setcursor();
 }
 
 static void
@@ -639,8 +649,8 @@ handle_global(void *data, struct wl_registry *registry, uint32_t name, const cha
 		wl->data_device_manager = wl_registry_bind(registry, name, &wl_data_device_manager_interface, 3);
 	} else if(strcmp(interface, zwp_primary_selection_device_manager_v1_interface.name) == 0){
 		wl->primsel = wl_registry_bind(registry, name, &zwp_primary_selection_device_manager_v1_interface, 1);
-	} else if(strcmp(interface, zwlr_virtual_pointer_manager_v1_interface.name) == 0){
-		wl->vpmgr = wl_registry_bind(registry, name, &zwlr_virtual_pointer_manager_v1_interface, 1);
+	} else if(strcmp(interface, zwp_pointer_constraints_v1_interface.name) == 0){
+		wl->constraints = wl_registry_bind(registry, name, &zwp_pointer_constraints_v1_interface, 1);
 	}
 }
 
@@ -660,7 +670,7 @@ handle_decor_error(struct libdecor *context, enum libdecor_error err, const char
 	panic("libdecor error");
 }
 
-const struct libdecor_interface decor_interface = {
+struct libdecor_interface decor_interface = {
 	.error = handle_decor_error,
 };
 
@@ -697,9 +707,16 @@ handle_decor_frame_commit(struct libdecor_frame *frame, void *aux)
 	wl_surface_commit(wl->surface);
 }
 
-const struct libdecor_frame_interface decor_frame_interface = {
+static void
+handle_decor_frame_close(struct libdecor_frame *frame, void *aux)
+{
+	exit(0);
+}
+
+struct libdecor_frame_interface decor_frame_interface = {
 	.configure = handle_decor_frame_configure,
 	.commit = handle_decor_frame_commit,
+	.close = handle_decor_frame_close,
 };
 
 void
@@ -722,9 +739,6 @@ wlsetcb(Wlwin *wl)
 
 	if(wl->shm == nil || wl->compositor == nil || wl->xdg_wm_base == nil || wl->seat == nil)
 		panic("required wayland capabilities not met");
-
-	if(wl->vpmgr != nil)
-		wl->vpointer = zwlr_virtual_pointer_manager_v1_create_virtual_pointer(wl->vpmgr, wl->seat);
 
 	wlallocbuffer(wl);
 	wl->surface = wl_compositor_create_surface(wl->compositor);
@@ -794,13 +808,14 @@ wlgetsnarf(Wlwin *wl)
 void
 wlsetmouse(Wlwin *wl, Point p)
 {
-	Point delta;
-	if(wl->vpointer == nil)
+	struct zwp_locked_pointer_v1 *pointer;
+	if(wl->constraints == nil)
 		return;
 
-	delta.x = p.x - wl->mouse.xy.x;
-	delta.y = p.y - wl->mouse.xy.y;
+	pointer = zwp_pointer_constraints_v1_lock_pointer(wl->constraints, wl->surface, wl->pointer, NULL, ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_PERSISTENT);
+	zwp_locked_pointer_v1_set_cursor_position_hint(pointer, wl_fixed_from_int (p.x), wl_fixed_from_int (p.y));
+	wl_surface_commit(wl->surface);
+	zwp_locked_pointer_v1_destroy(pointer);
+
 	wl->mouse.xy = p;
-	zwlr_virtual_pointer_v1_motion(wl->vpointer,  time(nil) * 1000, delta.x * 256, delta.y * 256);
-	zwlr_virtual_pointer_v1_frame(wl->vpointer);
 }
