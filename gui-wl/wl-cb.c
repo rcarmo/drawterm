@@ -447,13 +447,32 @@ static const struct wl_seat_listener seat_listener = {
 	.name = seat_handle_name,
 };
 
+typedef struct {
+	int fd;
+	int len;
+	char msg[];
+} ClipWrite;
+
+static void
+clipwriteproc(void *arg)
+{
+	ClipWrite *c;
+	ulong n, pos;
+
+	c = arg;
+	for(pos = 0; (n = write(c->fd, c->msg+pos, c->len-pos)) > 0 && pos < c->len; pos += n)
+		;
+	close(c->fd);
+	free(c);
+	pexit(nil, 0);
+}
+
 static void
 data_source_handle_send(void *data, struct wl_data_source *source, const char *mime_type, int fd)
 {
-	ulong n;
-	ulong pos;
 	ulong len;
 	Wlwin *wl;
+	ClipWrite *c;
 
 	if(strcmp(mime_type, "text/plain;charset=utf-8") != 0)
 		return;
@@ -461,9 +480,11 @@ data_source_handle_send(void *data, struct wl_data_source *source, const char *m
 	wl = data;
 	qlock(&wl->clip.lk);
 	len = strlen(wl->clip.content);
-	for(pos = 0; (n = write(fd, wl->clip.content+pos, len-pos)) > 0 && pos < len; pos += n)
-		;
-	close(fd);
+	c = malloc(sizeof(ClipWrite) + len);
+	c->fd = fd;
+	c->len = len;
+	memcpy(c->msg, wl->clip.content, len);
+	kproc("clipwriteproc", clipwriteproc, c);
 	qunlock(&wl->clip.lk);
 }
 
@@ -488,10 +509,9 @@ static const struct wl_data_source_listener data_source_listener = {
 static void
 primsel_source_handle_send(void *data, struct zwp_primary_selection_source_v1 *source, const char *mime_type, int fd)
 {
-	ulong n;
-	ulong pos;
 	ulong len;
 	Wlwin *wl;
+	ClipWrite *c;
 
 	if(strcmp(mime_type, "text/plain;charset=utf-8") != 0)
 		return;
@@ -499,9 +519,11 @@ primsel_source_handle_send(void *data, struct zwp_primary_selection_source_v1 *s
 	wl = data;
 	qlock(&wl->clip.lk);
 	len = strlen(wl->clip.content);
-	for(pos = 0; (n = write(fd, wl->clip.content+pos, len-pos)) > 0 && pos < len; pos += n)
-		;
-	close(fd);
+	c = malloc(sizeof(ClipWrite) + len);
+	c->fd = fd;
+	c->len = len;
+	memcpy(c->msg, wl->clip.content, len);
+	kproc("clipwriteproc", clipwriteproc, c);
 	qunlock(&wl->clip.lk);
 }
 
