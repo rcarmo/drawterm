@@ -39,7 +39,7 @@ typedef int    Devgen(Chan*, char*, Dirtab*, int, int, Dir*);
 
 enum
 {
-	SnarfSize = 64*1024,
+	SnarfSize = 2*1024*1024,
 };
 
 struct Conf
