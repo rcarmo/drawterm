@@ -72,7 +72,7 @@ qunlock(QLock *q)
 
 	lock(&q->lk);
 	/* 
-	 * Can't assert this because of RWlock
+	 * Can't assert this because of RWLock
 	assert(q->hold == CT);
 	 */
 	p = dequeue((Proc**)&q->first, (Proc**)&q->last);

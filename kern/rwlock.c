@@ -5,7 +5,7 @@
 #include "error.h"
 
 void
-rlock(RWlock *l)
+rlock(RWLock *l)
 {
 	qlock(&l->x);		/* wait here for writers and exclusion */
 	lock(&l->lk);
@@ -16,7 +16,7 @@ rlock(RWlock *l)
 }
 
 void
-runlock(RWlock *l)
+runlock(RWLock *l)
 {
 	lock(&l->lk);
 	if(--l->readers == 0)	/* last reader out allows writers */
@@ -25,14 +25,14 @@ runlock(RWlock *l)
 }
 
 void
-wlock(RWlock *l)
+wlock(RWLock *l)
 {
 	qlock(&l->x);		/* wait here for writers and exclusion */
 	qlock(&l->k);		/* wait here for last reader */
 }
 
 void
-wunlock(RWlock *l)
+wunlock(RWLock *l)
 {
 	qunlock(&l->k);
 	qunlock(&l->x);

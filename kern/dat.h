@@ -29,7 +29,7 @@ typedef struct Queue	Queue;
 typedef struct Ref	Ref;
 typedef struct Rendez	Rendez;
 typedef struct Rgrp	Rgrp;
-typedef struct RWlock	RWlock;
+typedef struct RWLock	RWLock;
 typedef struct Waitq	Waitq;
 typedef struct Walkqid	Walkqid;
 typedef struct Kmesg	Kmesg;
@@ -66,7 +66,7 @@ struct Rendez
 	Proc	*p;
 };
 
-struct RWlock	/* changed from kernel */
+struct RWLock	/* changed from kernel */
 {
 	int	readers;
 	Lock	lk;
@@ -249,7 +249,7 @@ struct Mount
 struct Mhead
 {
 	Ref ref;
-	RWlock	lock;
+	RWLock	lock;
 	Chan*	from;			/* channel mounted upon */
 	Mount*	mount;			/* what's mounted upon it */
 	Mhead*	hash;			/* Hash chain */
@@ -293,7 +293,7 @@ struct Pgrp
 	Ref ref;				/* also used as a lock when mounting */
 	int	noattach;
 	QLock	debug;			/* single access via devproc.c */
-	RWlock	ns;			/* Namespace n read/one write lock */
+	RWLock	ns;			/* Namespace n read/one write lock */
 	Mhead	*mnthash[MNTHASH];
 };
 
@@ -306,7 +306,7 @@ struct Rgrp
 struct Egrp
 {
 	Ref ref;
-	RWlock lk;
+	RWLock lk;
 	Evalue	**ent;
 	int nent;
 	int ment;

@@ -506,9 +506,9 @@ newmhead(Chan *from)
  *	- the mhead in chans returned from createdir:
  *	  used in the open/create race protect, which is gone.
  *
- * The RWlock in the Mhead protects the mount list it contains.
+ * The RWLock in the Mhead protects the mount list it contains.
  * The mount list is deleted in cunmount() and closepgrp().
- * The RWlock ensures that nothing is using the mount list at that time.
+ * The RWLock ensures that nothing is using the mount list at that time.
  *
  * It is okay to replace c->mh with whatever you want as 
  * long as you are sure you have a unique reference to it.
