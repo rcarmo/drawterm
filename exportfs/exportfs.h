@@ -2,12 +2,10 @@
  * exportfs.h - definitions for exporting file server
  */
 
-#define DEBUG		if(!dbg){}else fprint
-#define DFD		2
+#define DEBUG(...)
 #define fidhash(s)	fhash[s%FHASHSIZE]
 
 #define Proc	Exproc
-
 
 typedef struct Fsrpc Fsrpc;
 typedef struct Fid Fid;
@@ -17,12 +15,10 @@ typedef struct Qidtab Qidtab;
 
 struct Fsrpc
 {
-	int	busy;		/* Work buffer has pending rpc to service */
-	void*	kp;		/* slave process executing the rpc */
-	int	canint;		/* Interrupt gate */
+	Fsrpc	*next;		/* freelist */
 	int	flushtag;	/* Tag on which to reply to flush */
-	Fcall work;		/* Plan 9 incoming Fcall */
-	uchar	*buf;	/* Data buffer */
+	Fcall	work;		/* Plan 9 incoming Fcall */
+	uchar	buf[];		/* Data buffer */
 };
 
 struct Fid
@@ -33,6 +29,13 @@ struct Fid
 	int	nr;		/* fid number */
 	int	mid;		/* Mount id */
 	Fid	*next;		/* hash link */
+
+	/* for preaddir -- ARRGH! */
+	Dir	*dir;		/* buffer for reading directories */
+	int	ndir;		/* number of entries in dir */
+	int	cdir;		/* number of consumed entries in dir */
+	int	gdir;		/* glue index */
+	vlong	offset;		/* offset in virtual directory */
 };
 
 struct File
@@ -49,9 +52,10 @@ struct File
 
 struct Proc
 {
-	void	*kp;
-	int	busy;
+	Lock	lock;
+	Fsrpc	*busy;
 	Proc	*next;
+	void	*kp;
 };
 
 struct Qidtab
@@ -66,9 +70,7 @@ struct Qidtab
 
 enum
 {
-	MAXPROC		= 50,
 	FHASHSIZE	= 64,
-	Nr_workbufs 	= 50,
 	Fidchunk	= 1000,
 	Npsmpt		= 32,
 	Nqidbits		= 5,
@@ -76,34 +78,26 @@ enum
 };
 
 #define Enomem Exenomem
-#define Ebadfix Exebadfid
+#define Ebadfid Exebadfid
 #define Enotdir Exenotdir
 #define Edupfid Exedupfid
 #define Eopen Exeopen
 #define Exmnt Exexmnt
-#define Emip Exemip
-#define Enopsmt Exenopsmt
 
+extern char Enomem[];
 extern char Ebadfid[];
 extern char Enotdir[];
 extern char Edupfid[];
 extern char Eopen[];
 extern char Exmnt[];
-extern char Enomem[];
-extern char Emip[];
-extern char Enopsmt[];
 
-Extern Fsrpc	*Workq;
-Extern int  	dbg;
 Extern File	*root;
 Extern File	*psmpt;
 Extern Fid	**fhash;
 Extern Fid	*fidfree;
 Extern Proc	*Proclist;
-Extern char	psmap[Npsmpt];
 Extern Qidtab	*qidtab[Nqidtab];
 Extern ulong	messagesize;
-Extern int		srvfd;
 
 /* File system protocol service procedures */
 void Xattach(Fsrpc*);
@@ -119,11 +113,15 @@ void Xwalk(Fsrpc*);
 void Xwstat(Fsrpc*);
 void slave(Fsrpc*);
 
+void	io(int, int);
 void	reply(Fcall*, Fcall*, char*);
+void	mounterror(char*);
+
 Fid 	*getfid(int);
 int	freefid(int);
 Fid	*newfid(int);
 Fsrpc	*getsbuf(void);
+void	putsbuf(Fsrpc*);
 void	initroot(void);
 void	fatal(char*, ...);
 char*	makepath(File*, char*);
@@ -141,8 +139,4 @@ Qidtab* uniqueqid(Dir*);
 void	freeqid(Qidtab*);
 char*	estrdup(char*);
 void*	emallocz(uint);
-int		readmessage(int, char*, int);
-
-#define notify(x)
-#define noted(x)
-
+int	readmessage(int, char*, int);

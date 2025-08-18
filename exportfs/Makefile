@@ -2,9 +2,12 @@ ROOT=..
 include ../Make.config
 LIB=libexportfs.a
 
+HFILES=exportfs.h
+
 OFILES=\
 	exportfs.$O\
-	exportsrv.$O
+	exportsrv.$O\
+	io.$O\
 
 default: $(LIB)
 $(LIB): $(OFILES)
