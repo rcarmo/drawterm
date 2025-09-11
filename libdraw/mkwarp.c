@@ -4,6 +4,8 @@
 
 typedef double Matrix[3][3];
 
+void invm(Matrix);
+
 /* 25.7 fixed-point number operations */
 
 #define flt2fix(n)	((long)((n)*(1<<7) + ((n) < 0? -0.5: 0.5)))
