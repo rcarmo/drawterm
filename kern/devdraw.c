@@ -862,6 +862,14 @@ drawpoint(Point *p, uchar *a)
 	p->y = BGLONG(a+1*4);
 }
 
+void
+drawwarp(Warp w, uchar *a)
+{
+	w[0][0] = BGLONG(a+0*3*4+0*4); w[0][1] = BGLONG(a+0*3*4+1*4); w[0][2] = BGLONG(a+0*3*4+2*4);
+	w[1][0] = BGLONG(a+1*3*4+0*4); w[1][1] = BGLONG(a+1*3*4+1*4); w[1][2] = BGLONG(a+1*3*4+2*4);
+	w[2][0] = BGLONG(a+2*3*4+0*4); w[2][1] = BGLONG(a+2*3*4+1*4); w[2][2] = BGLONG(a+2*3*4+2*4);
+}
+
 Point
 drawchar(Memimage *dst, Memimage *rdst, Point p, Memimage *src, Point *sp, DImage *font, int index, int op)
 {
@@ -1421,6 +1429,7 @@ drawmesg(Client *client, void *av, int n)
 	Refx *refx;
 	CScreen *cs;
 	Refreshfn reffn;
+	Warp w;
 
 	a = av;
 	m = 0;
@@ -1509,6 +1518,23 @@ drawmesg(Client *client, void *av, int n)
 				error(Edrawmem);
 			}
 			memfillcolor(i, value);
+			continue;
+
+		/* apply affine transform: 'a' dstid[4] R[4*4] srcid[4] P[2*4] M[3*3*4] smooth[1] */
+		case 'a':
+			printmesg(fmt="LRLPMb", a, 0);
+			m = 1+4+4*4+4+2*4+3*3*4+1;
+			if(n < m)
+				error(Eshortdraw);
+			dst = drawimage(client, a+1);
+			dstid = BGLONG(a+1);
+			drawrectangle(&r, a+5);
+			src = drawimage(client, a+21);
+			drawpoint(&p, a+25);
+			drawwarp(w, a+33);
+			if(memaffinewarp(dst, r, src, p, w, a[33+3*3*4]) < 0)
+				error("memaffinewarp failed");
+			dstflush(dstid, dst, r);
 			continue;
 
 		/* allocate screen: 'A' id[4] imageid[4] fillid[4] public[1] */
