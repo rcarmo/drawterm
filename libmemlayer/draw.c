@@ -121,7 +121,7 @@ memdraw(Memimage *dst, Rectangle r, Memimage *src, Point p0, Memimage *mask, Poi
 				tr.min.x = srcr.min.x;
 			}
 			if(srcr.min.y < tr.min.y){
-				p1.y += tr.min.x - srcr.min.x;
+				p1.y += tr.min.y - srcr.min.y;
 				tr.min.y = srcr.min.y;
 			}
 			if(srcr.max.x > tr.max.x)
