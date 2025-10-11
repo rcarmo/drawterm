@@ -49,12 +49,14 @@ keyboard_keymap(void *data, struct wl_keyboard *keyboard, uint32_t format, int32
 
 	wl = data;
 	keymap_string = mmap(nil, size, PROT_READ, MAP_SHARED, fd, 0);
-	xkb_keymap_unref(keymap);
-	keymap = xkb_keymap_new_from_string(wl->xkb_context, keymap_string, XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
-	munmap(keymap_string, size);
+	if (keymap_string != MAP_FAILED) {
+		xkb_keymap_unref(keymap);
+		keymap = xkb_keymap_new_from_string(wl->xkb_context, keymap_string, XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
+		munmap(keymap_string, size);
+		xkb_state_unref(wl->xkb_state);
+		wl->xkb_state = xkb_state_new(keymap);
+	}
 	close(fd);
-	xkb_state_unref(wl->xkb_state);
-	wl->xkb_state = xkb_state_new(keymap);
 }
 
 static void
