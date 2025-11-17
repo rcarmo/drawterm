@@ -182,6 +182,14 @@ print(char *fmt, ...)
 	return n;
 }
 
+static void
+hang(void)
+{
+	Rendez z = {0};
+	while(up == nil) osyield();
+	for(;;) sleep(&z, return0, 0);
+}
+
 void
 panic(char *fmt, ...)
 {
@@ -191,8 +199,7 @@ panic(char *fmt, ...)
 
 	kprintoq = nil;	/* don't try to write to /dev/kprint */
 
-	if(panicking++)
-		for(;;) osyield();
+	if(panicking++) hang();
 	splhi();
 	strcpy(buf, "panic: ");
 	va_start(arg, fmt);
@@ -201,8 +208,7 @@ panic(char *fmt, ...)
 	buf[n] = '\n';
 	spllo();
 	putstrn(buf, n+1);
-	while(screenputs != 0)
-		osyield();
+	if(screenputs) hang();
 	setterm(0);
 	exit(1);
 }
