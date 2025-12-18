@@ -906,7 +906,7 @@ evkey(uint v)
 		}else if(m & NSEventModifierFlagCommand)
 			u = 4;
 	}
-	absmousetrack(q.x, (self.frame.size.height/lscale) - q.y, u, ticks());
+	absmousetrack(q.x, q.y, u, ticks());
 	if(u && _lastInputRect.size.width && _lastInputRect.size.height)
 		[self resetLastInputRect];
 }
