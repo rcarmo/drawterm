@@ -7,6 +7,7 @@
 - Mouse and resize paths honor logical scaling; raw mode keeps pixel-accurate frame buffer.
 - Metal redraw path limits full-surface invalidation to scale/resize events; incremental flushes use region updates.
 - macOS pasteboard bridge for text snarf/clipboard; getenv fixed to use host environment safely.
+- Cocoa "Connect…" dialog to set CPU/auth hosts and ports, user, and optional saved password; defaults persist between runs.
 
 ## Description
 
@@ -24,10 +25,12 @@ This fork keeps drawterm working smoothly on modern macOS systems while retainin
 ## Usage
 
 - Android: the five checkboxes map to the three mouse buttons and mouse wheel; `kb` toggles the soft keyboard.
+- macOS Cocoa: use Drawterm → Connect… (Cmd+O) to enter CPU/auth endpoints and user; enable "Save password" to reuse it on next launch.
 
 ## Caveats
 
 - Android: saved login details are stored as plaintext; secstore is not supported.
+- macOS: saved passwords live in user defaults (plaintext); disable "Save password" if that is unacceptable.
 
 ## Binaries
 
