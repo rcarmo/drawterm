@@ -2,6 +2,11 @@
 #import <Cocoa/Cocoa.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
+#include <stdint.h>
+#include <math.h>
+#include <string.h>
+#include <stdlib.h>
+#include <objc/runtime.h>
 #undef Rect
 
 #undef nil
@@ -43,11 +48,110 @@ Memimage *gscreen;
 static AppDelegate *myApp;
 static DrawtermView *myview;
 static NSCursor *currentCursor;
+static NSString *ScaleDefaultsKey = @"DrawtermUIScale";
 
 static ulong pal[256];
 
 static int readybit;
 static Rendez rend;
+static double uiscale = 1.0;     // user-selected UI scale (0 means raw pixels)
+static CGFloat devscale = 1.0;   // device backing scale
+static uchar *scalebuf;
+static size_t scalebufsz;
+static int forcefullredraw;
+
+static inline int
+effscale(void)
+{
+	// Effective pixel scale for upscaling to the Metal texture.
+	if(uiscale <= 0.0)
+		return 1; // raw pixels; gscreen is sized to device pixels
+	int es = (int)ceil(devscale * uiscale);
+	return es < 1 ? 1 : es;
+}
+
+static inline double
+logicalscale(void)
+{
+	// Logical pixels per view point. If uiscale==0 => raw device pixels.
+	if(uiscale <= 0.0)
+		return devscale > 0 ? 1.0 / devscale : 1.0;
+	return uiscale;
+}
+
+static char*
+hostgetenv(const char *name)
+{
+	extern char **environ;
+	size_t n;
+	char **p;
+
+	if(name == nil || *name == '\0' || environ == nil)
+		return nil;
+	n = strlen(name);
+	for(p = environ; *p != nil; p++){
+		if(strncmp(*p, name, n) == 0 && (*p)[n] == '=')
+			return strdup((*p) + n + 1);
+	}
+	return nil;
+}
+
+static double
+detectscale(CGFloat fallback)
+{
+	CGFloat s;
+
+	s = fallback;
+	if(s < 1.0 && [NSScreen mainScreen] != nil)
+		s = [NSScreen mainScreen].backingScaleFactor;
+	if(s < 1.0)
+		s = 1.0;
+	return (double)s;
+}
+
+static double
+preferredscale(CGFloat fallback)
+{
+	char *env;
+	double s;
+	NSUserDefaults *def;
+	double stored;
+	id obj;
+
+	env = hostgetenv("DRAWTERM_SCALE");
+	if(env != nil){
+		s = strtod(env, NULL);
+		free(env);
+		if(s >= 0.0)
+			return s;
+	}
+	def = [NSUserDefaults standardUserDefaults];
+	obj = [def objectForKey:ScaleDefaultsKey];
+	if(obj != nil){
+		stored = [def doubleForKey:ScaleDefaultsKey];
+		if(stored >= 0.0)
+			return stored;
+	}
+	s = 1.0; // default user scale 1x; device scale handled separately
+	return s;
+}
+
+static uchar*
+scalebufensure(NSUInteger w, NSUInteger h)
+{
+	size_t need;
+
+	need = (size_t)w * (size_t)h * 4;
+	if(need > scalebufsz){
+		scalebuf = realloc(scalebuf, need);
+		if(scalebuf == nil){
+			scalebufsz = 0;
+			return nil;
+		}
+		scalebufsz = need;
+	}
+	return scalebuf;
+}
 
 static int
 isready(void*a)
@@ -72,9 +176,13 @@ void
 screeninit(void)
 {
 	memimageinit();
-	NSSize s = [myview convertSizeToBacking:myview.frame.size];
-	screensize(Rect(0, 0, s.width, s.height), ARGB32);
-	gscreen->clipr = Rect(0, 0, s.width, s.height);
+	NSSize s = myview.frame.size;
+	devscale = myview.window.backingScaleFactor > 0 ? myview.window.backingScaleFactor : 1.0;
+	uiscale = preferredscale(devscale);
+	double lscale = logicalscale();
+	screensize(Rect(0, 0, s.width/lscale, s.height/lscale), ARGB32);
+	gscreen->clipr = Rect(0, 0, s.width/lscale, s.height/lscale);
+	forcefullredraw = 1;
 	LOG(@"%g %g", s.width, s.height);
 	terminit();
 	readybit = 1;
@@ -85,26 +193,29 @@ void
 screensize(Rectangle r, ulong chan)
 {
 	Memimage *i;
+	int tw, th;
 
 	if((i = allocmemimage(r, chan)) == nil)
 		return;
 	if(gscreen != nil)
 		freememimage(gscreen);
 @autoreleasepool{
+	int es = effscale();
+	tw = Dx(r) * es;
+	th = Dy(r) * es;
 	DrawLayer *layer = (DrawLayer *)myview.layer;
 	MTLTextureDescriptor *textureDesc = [MTLTextureDescriptor
 		texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
-		width:Dx(r)
-		height:Dy(r)
+		width:tw
+		height:th
 		mipmapped:NO];
 	textureDesc.allowGPUOptimizedContents = YES;
 	textureDesc.usage = MTLTextureUsageShaderRead;
 	textureDesc.cpuCacheMode = MTLCPUCacheModeWriteCombined;
 	layer.texture = [layer.device newTextureWithDescriptor:textureDesc];
 
-	CGFloat scale = myview.window.backingScaleFactor;
-	[layer setDrawableSize:NSMakeSize(Dx(r), Dy(r))];
-	[layer setContentsScale:scale];
+	[layer setDrawableSize:NSMakeSize(tw, th)];
+	[layer setContentsScale:devscale];
 }
 	gscreen = i;
 	gscreen->clipr = ZR;
@@ -156,27 +267,71 @@ flushmemscreen(Rectangle r)
 		return;
 	LOG(@"-> %d %d %d %d", r.min.x, r.min.y, Dx(r), Dy(r));
 	@autoreleasepool{
-		[((DrawLayer *)myview.layer).texture
-			replaceRegion:MTLRegionMake2D(r.min.x, r.min.y, Dx(r), Dy(r))
-			mipmapLevel:0
-			withBytes:byteaddr(gscreen, Pt(r.min.x, r.min.y))
-			bytesPerRow:gscreen->width * 4];
-		NSRect sr = [[myview window] convertRectFromBacking:NSMakeRect(r.min.x, r.min.y, Dx(r), Dy(r))];
+		int es = effscale();
+		if((uiscale == 1.0 || uiscale <= 0.0) && es == 1){
+			[((DrawLayer *)myview.layer).texture
+				replaceRegion:MTLRegionMake2D(r.min.x, r.min.y, Dx(r), Dy(r))
+				mipmapLevel:0
+				withBytes:byteaddr(gscreen, Pt(r.min.x, r.min.y))
+				bytesPerRow:gscreen->width * 4];
+		}else{
+			int sw, sh, x, y, sx, sy;
+			uchar *dst, *src;
+			size_t stride;
+
+			sw = Dx(r) * es;
+			sh = Dy(r) * es;
+			dst = scalebufensure(sw, sh);
+			if(dst == nil)
+				return;
+			stride = gscreen->width * 4;
+			src = byteaddr(gscreen, Pt(r.min.x, r.min.y));
+			for(y = 0; y < Dy(r); y++){
+				uint32_t *s = (uint32_t *)(src + y * stride);
+				for(sy = 0; sy < es; sy++){
+					uint32_t *d = (uint32_t *)(dst + (y * es + sy) * sw * 4);
+					for(x = 0; x < Dx(r); x++){
+						uint32_t p = s[x];
+						for(sx = 0; sx < es; sx++)
+							d[x * es + sx] = p;
+					}
+				}
+			}
+			[((DrawLayer *)myview.layer).texture
+				replaceRegion:MTLRegionMake2D(r.min.x * es, r.min.y * es, sw, sh)
+				mipmapLevel:0
+				withBytes:dst
+				bytesPerRow:sw * 4];
+		}
+		double lscale = logicalscale();
+		NSRect sr = NSMakeRect(r.min.x * lscale, r.min.y * lscale, Dx(r) * lscale, Dy(r) * lscale);
+		int full = forcefullredraw;
+		if(full)
+			forcefullredraw = 0;
 		dispatch_async(dispatch_get_main_queue(), ^(void){@autoreleasepool{
 			LOG(@"setNeedsDisplayInRect %g %g %g %g", sr.origin.x, sr.origin.y, sr.size.width, sr.size.height);
-			[myview setNeedsDisplayInRect:sr];
+			if(full)
+				[myview setNeedsDisplay:YES];
+			else
+				[myview setNeedsDisplayInRect:sr];
 			[myview enlargeLastInputRect:sr];
 		}});
 		// ReplaceRegion is somehow asynchronous since 10.14.5.  We wait sometime to request a update again.
 		dispatch_time_t time = dispatch_time(DISPATCH_TIME_NOW, 8 * NSEC_PER_MSEC);
 		dispatch_after(time, dispatch_get_main_queue(), ^(void){@autoreleasepool{
 			LOG(@"setNeedsDisplayInRect %g %g %g %g again", sr.origin.x, sr.origin.y, sr.size.width, sr.size.height);
-			[myview setNeedsDisplayInRect:sr];
+			if(full)
+				[myview setNeedsDisplay:YES];
+			else
+				[myview setNeedsDisplayInRect:sr];
 		}});
 		time = dispatch_time(DISPATCH_TIME_NOW, 16 * NSEC_PER_MSEC);
 		dispatch_after(time, dispatch_get_main_queue(), ^(void){@autoreleasepool{
 			LOG(@"setNeedsDisplayInRect %g %g %g %g again", sr.origin.x, sr.origin.y, sr.size.width, sr.size.height);
-			[myview setNeedsDisplayInRect:sr];
+			if(full)
+				[myview setNeedsDisplay:YES];
+			else
+				[myview setNeedsDisplayInRect:sr];
 		}});
 	}
 }
@@ -283,10 +438,9 @@ mouseset(Point p)
 		NSPoint s;
 
 		if([[myview window] isKeyWindow]){
-			s = NSMakePoint(p.x, p.y);
+			double lscale = logicalscale();
+			s = NSMakePoint(p.x * lscale, p.y * lscale);
 			LOG(@"-> pixel  %g %g", s.x, s.y);
-			s = [[myview window] convertPointFromBacking:s];
-			LOG(@"-> point  %g %g", s.x, s.y);
 			s = [myview convertPoint:s toView:nil];
 			LOG(@"-> window %g %g", s.x, s.y);
 			s = [[myview window] convertPointToScreen: s];
@@ -304,6 +458,86 @@ mouseset(Point p)
 	NSWindow *_window;
 }
 
+- (void)scaleSliderChanged:(NSSlider *)sender
+{
+	double step = 0.25;
+	double v = sender.doubleValue;
+	if(v < step/2)
+		v = 0.0; // raw pixels
+	else
+		v = round(v/step)*step;
+	[sender setDoubleValue:v];
+	NSTextField *label = (NSTextField *)objc_getAssociatedObject(sender, @"scaleLabel");
+	if(label)
+		[label setStringValue:(v == 0.0 ? @"raw" : [NSString stringWithFormat:@"%.2f", v])];
+}
+
+- (NSWindow *)window
+{
+	return _window;
+}
+
+- (void)applyScaleAndResize:(double)scale
+{
+	uiscale = scale;
+	/*
+	 * Force a resize even if the logical size is unchanged so the new scale
+	 * rebuilds the Metal texture. Do a bump-then-restore pass to defeat the
+	 * eqrect short circuit in resizeproc.
+	 */
+	double lscale = logicalscale();
+	int w = (int)(myview.frame.size.width/lscale);
+	int h = (int)(myview.frame.size.height/lscale);
+	if(w < 1) w = 1;
+	if(h < 1) h = 1;
+	screenresize(Rect(0, 0, w+1, h+1));
+	screenresize(Rect(0, 0, w, h));
+	forcefullredraw = 1;
+	flushmemscreen(Rect(0, 0, w, h));
+}
+
+- (void)openPreferences:(id)sender
+{
+	double detected = detectscale(self.window.backingScaleFactor);
+	NSAlert *alert = [NSAlert new];
+	[alert setMessageText:@"Interface Scale"];
+	[alert setInformativeText:[NSString stringWithFormat:@"Adjust UI size for HiDPI/Retina displays. Detected: %.2f", detected]];
+	NSSlider *slider = [NSSlider sliderWithValue:uiscale
+		minValue:0.0
+		maxValue:4
+		target:self
+		action:@selector(scaleSliderChanged:)];
+	[slider setAllowsTickMarkValuesOnly:YES];
+	[slider setNumberOfTickMarks:17]; // 0.0..4.0 in 0.25 steps
+	[slider setContinuous:YES];
+	NSTextField *value = [NSTextField labelWithString:(uiscale == 0.0 ? @"raw" : [NSString stringWithFormat:@"%.2f", uiscale])];
+	[value setFrame:NSMakeRect(220, 18, 32, 16)];
+	[value setAlignment:NSTextAlignmentRight];
+	objc_setAssociatedObject(slider, @"scaleLabel", value, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+	NSView *box = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 260, 48)];
+	[slider setFrame:NSMakeRect(10, 12, 200, 24)];
+	[box addSubview:slider];
+	[box addSubview:value];
+	[alert setAccessoryView:box];
+	[alert addButtonWithTitle:@"OK"];
+	[alert addButtonWithTitle:@"Cancel"];
+
+	if([alert runModal] == NSAlertFirstButtonReturn){
+		double newScale = slider.doubleValue;
+		if(newScale < 0.125)
+			newScale = 0.0;
+		else
+			newScale = round(newScale/0.25)*0.25;
+		if(newScale != uiscale){
+			NSUserDefaults *def = [NSUserDefaults standardUserDefaults];
+			[def setDouble:newScale forKey:ScaleDefaultsKey];
+			[def synchronize];
+			[self applyScaleAndResize:newScale];
+		}else{
+		}
+	}
+}
+
 static void
 mainproc(void *aux)
 {
@@ -317,6 +551,7 @@ mainproc(void *aux)
 	NSMenu *sm = [NSMenu new];
 	[sm addItemWithTitle:@"Toggle Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"];
 	[sm addItemWithTitle:@"Hide" action:@selector(hide:) keyEquivalent:@"h"];
+	[sm addItemWithTitle:@"Preferences…" action:@selector(openPreferences:) keyEquivalent:@","];
 	[sm addItemWithTitle:@"Quit" action:@selector(terminate:) keyEquivalent:@"q"];
 	NSMenu *m = [NSMenu new];
 	[m addItemWithTitle:@"DEVDRAW" action:NULL keyEquivalent:@""];
@@ -377,8 +612,9 @@ mainproc(void *aux)
 - (void) windowDidBecomeKey:(id)arg
 {
 	NSPoint p;
-	p = [_window convertPointToBacking:[_window mouseLocationOutsideOfEventStream]];
-	absmousetrack(p.x, [myview convertSizeToBacking:myview.frame.size].height - p.y, 0, ticks());
+	p = [myview convertPoint:[_window mouseLocationOutsideOfEventStream] fromView:nil];
+	double lscale = logicalscale();
+	absmousetrack(p.x/lscale, (self.window.contentView.frame.size.height - p.y)/lscale, 0, ticks());
 }
 
 - (void) windowDidResignKey:(id)arg
@@ -595,10 +831,11 @@ evkey(uint v)
 	NSUInteger u;
 	NSEventModifierFlags m;
 
-	p = [self.window convertPointToBacking:[self.window mouseLocationOutsideOfEventStream]];
+	p = [self convertPoint:[event locationInWindow] fromView:nil];
 	u = [NSEvent pressedMouseButtons];
-	q.x = p.x;
-	q.y = p.y;
+	double lscale = logicalscale();
+	q.x = p.x/lscale;
+	q.y = p.y/lscale;
 	if(!ptinrect(q, gscreen->clipr)) return;
 	u = (u&~6) | (u&4)>>1 | (u&2)<<1;
 	if(u == 1){
@@ -609,7 +846,7 @@ evkey(uint v)
 		}else if(m & NSEventModifierFlagCommand)
 			u = 4;
 	}
-	absmousetrack(p.x, [self convertSizeToBacking:self.frame.size].height - p.y, u, ticks());
+	absmousetrack(q.x, (self.frame.size.height/lscale) - q.y, u, ticks());
 	if(u && _lastInputRect.size.width && _lastInputRect.size.height)
 		[self resetLastInputRect];
 }
@@ -697,10 +934,18 @@ evkey(uint v)
 
 - (void) reshape
 {
-	NSSize s = [self convertSizeToBacking:self.frame.size];
+	NSSize s = self.frame.size;
+	uiscale = preferredscale(self.window.backingScaleFactor);
+	devscale = self.window.backingScaleFactor > 0 ? self.window.backingScaleFactor : 1.0;
 	LOG(@"%g %g", s.width, s.height);
 	if(gscreen != nil){
-		screenresize(Rect(0, 0, s.width, s.height));
+		double lscale = logicalscale();
+		int w = (int)(s.width/lscale);
+		int h = (int)(s.height/lscale);
+		if(w < 1) w = 1;
+		if(h < 1) h = 1;
+		screenresize(Rect(0, 0, w, h));
+		forcefullredraw = 1;
 	}
 }
 
