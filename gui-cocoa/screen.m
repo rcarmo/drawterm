@@ -79,6 +79,23 @@ logicalscale(void)
 	return uiscale;
 }
 
+static inline int
+effscale_for(double ui, double dev)
+{
+	if(ui <= 0.0)
+		return 1;
+	int es = (int)ceil(dev * ui);
+	return es < 1 ? 1 : es;
+}
+
+static inline double
+logicalscale_for(double ui, double dev)
+{
+	if(ui <= 0.0)
+		return dev > 0 ? 1.0 / dev : 1.0;
+	return ui;
+}
+
 static char*
 hostgetenv(const char *name)
 {
@@ -193,32 +210,50 @@ void
 screensize(Rectangle r, ulong chan)
 {
 	Memimage *i;
+	Memimage *old;
 	int tw, th;
+	double ui;
+	double dev;
 
 	if((i = allocmemimage(r, chan)) == nil)
 		return;
-	if(gscreen != nil)
-		freememimage(gscreen);
 @autoreleasepool{
-	int es = effscale();
+	ui = uiscale;
+	dev = devscale;
+	int es = effscale_for(ui, dev);
 	tw = Dx(r) * es;
 	th = Dy(r) * es;
 	DrawLayer *layer = (DrawLayer *)myview.layer;
+	id<MTLTexture> newtex;
 	MTLTextureDescriptor *textureDesc = [MTLTextureDescriptor
 		texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
 		width:tw
 		height:th
 		mipmapped:NO];
-	textureDesc.allowGPUOptimizedContents = YES;
+	/*
+	 * We update this texture from the CPU via replaceRegion, so keep it in a
+	 * CPU-addressable storage mode. GPU-optimized/private textures may crash or
+	 * fail updates when the texture gets large.
+	 */
+	textureDesc.allowGPUOptimizedContents = NO;
+	textureDesc.storageMode = MTLStorageModeManaged;
 	textureDesc.usage = MTLTextureUsageShaderRead;
 	textureDesc.cpuCacheMode = MTLCPUCacheModeWriteCombined;
-	layer.texture = [layer.device newTextureWithDescriptor:textureDesc];
+	newtex = [layer.device newTextureWithDescriptor:textureDesc];
+	if(newtex == nil){
+		freememimage(i);
+		return;
+	}
+	layer.texture = newtex;
 
 	[layer setDrawableSize:NSMakeSize(tw, th)];
-	[layer setContentsScale:devscale];
+	[layer setContentsScale:dev];
 }
+	old = gscreen;
 	gscreen = i;
 	gscreen->clipr = ZR;
+	if(old != nil)
+		freememimage(old);
 }
 
 Memdata*
@@ -263,12 +298,20 @@ void
 flushmemscreen(Rectangle r)
 {
 	LOG(@"<- %d %d %d %d", r.min.x, r.min.y, Dx(r), Dy(r));
+	/*
+	 * After resize/rescale we create a new texture. If we only upload the
+	 * incremental update rect, newly exposed areas will contain garbage.
+	 */
+	if(forcefullredraw)
+		r = gscreen->clipr;
 	if(rectclip(&r, gscreen->clipr) == 0)
 		return;
 	LOG(@"-> %d %d %d %d", r.min.x, r.min.y, Dx(r), Dy(r));
 	@autoreleasepool{
-		int es = effscale();
-		if((uiscale == 1.0 || uiscale <= 0.0) && es == 1){
+		double ui = uiscale;
+		double dev = devscale;
+		int es = effscale_for(ui, dev);
+		if((ui == 1.0 || ui <= 0.0) && es == 1){
 			[((DrawLayer *)myview.layer).texture
 				replaceRegion:MTLRegionMake2D(r.min.x, r.min.y, Dx(r), Dy(r))
 				mipmapLevel:0
@@ -303,7 +346,7 @@ flushmemscreen(Rectangle r)
 				withBytes:dst
 				bytesPerRow:sw * 4];
 		}
-		double lscale = logicalscale();
+		double lscale = logicalscale_for(ui, dev);
 		NSRect sr = NSMakeRect(r.min.x * lscale, r.min.y * lscale, Dx(r) * lscale, Dy(r) * lscale);
 		int full = forcefullredraw;
 		if(full)
@@ -493,7 +536,6 @@ mouseset(Point p)
 	screenresize(Rect(0, 0, w+1, h+1));
 	screenresize(Rect(0, 0, w, h));
 	forcefullredraw = 1;
-	flushmemscreen(Rect(0, 0, w, h));
 }
 
 - (void)openPreferences:(id)sender
@@ -615,6 +657,16 @@ mainproc(void *aux)
 	p = [myview convertPoint:[_window mouseLocationOutsideOfEventStream] fromView:nil];
 	double lscale = logicalscale();
 	absmousetrack(p.x/lscale, (self.window.contentView.frame.size.height - p.y)/lscale, 0, ticks());
+}
+
+- (void) windowDidResize:(NSNotification *)notification
+{
+	/*
+	 * Live resize notifications are delivered to the NSWindow's delegate
+	 * (AppDelegate), not the content view. Trigger a reshape so the draw thread
+	 * can coalesce and rebuild the backing store/texture.
+	 */
+	[myview reshape];
 }
 
 - (void) windowDidResignKey:(id)arg
@@ -951,8 +1003,14 @@ evkey(uint v)
 
 - (void)windowDidResize:(NSNotification *)notification
 {
-	if(![self inLiveResize])
-		[self reshape];
+	/*
+	 * Some window managers resize the window interactively but we only
+	 * reshaped at the end of live-resize, causing stale/blank contents.
+	 * Always reshape; screenresize is coalesced by the resize proc.
+	 */
+	[self reshape];
+	/* Keep the layer presenting even if the draw thread lags. */
+	[self setNeedsDisplay:YES];
 }
 
 - (void)viewDidEndLiveResize
@@ -1164,6 +1222,8 @@ keystroke(Rune r)
 {
 	id<MTLCommandBuffer> cbuf;
 	id<MTLBlitCommandEncoder> blit;
+	if(_texture == nil || _texture.width == 0 || _texture.height == 0)
+		return;
 
 	cbuf = [_commandQueue commandBuffer];
 
