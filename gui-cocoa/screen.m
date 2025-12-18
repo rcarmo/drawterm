@@ -214,6 +214,8 @@ screensize(Rectangle r, ulong chan)
 	int tw, th;
 	double ui;
 	double dev;
+	if(Dx(r) <= 0 || Dy(r) <= 0)
+		return;
 
 	if((i = allocmemimage(r, chan)) == nil)
 		return;
@@ -223,6 +225,10 @@ screensize(Rectangle r, ulong chan)
 	int es = effscale_for(ui, dev);
 	tw = Dx(r) * es;
 	th = Dy(r) * es;
+	if(tw <= 0 || th <= 0){
+		freememimage(i);
+		return;
+	}
 	DrawLayer *layer = (DrawLayer *)myview.layer;
 	id<MTLTexture> newtex;
 	MTLTextureDescriptor *textureDesc = [MTLTextureDescriptor
@@ -236,7 +242,7 @@ screensize(Rectangle r, ulong chan)
 	 * fail updates when the texture gets large.
 	 */
 	textureDesc.allowGPUOptimizedContents = NO;
-	textureDesc.storageMode = MTLStorageModeManaged;
+	textureDesc.storageMode = MTLStorageModeShared;
 	textureDesc.usage = MTLTextureUsageShaderRead;
 	textureDesc.cpuCacheMode = MTLCPUCacheModeWriteCombined;
 	newtex = [layer.device newTextureWithDescriptor:textureDesc];
@@ -305,6 +311,8 @@ flushmemscreen(Rectangle r)
 	if(forcefullredraw)
 		r = gscreen->clipr;
 	if(rectclip(&r, gscreen->clipr) == 0)
+		return;
+	if(Dx(r) <= 0 || Dy(r) <= 0)
 		return;
 	LOG(@"-> %d %d %d %d", r.min.x, r.min.y, Dx(r), Dy(r));
 	@autoreleasepool{
@@ -1234,6 +1242,8 @@ keystroke(Rune r)
 		[self setNeedsDisplay];
 		return;
 	}
+	if(drawable.texture == nil || drawable.texture.width == 0 || drawable.texture.height == 0)
+		return;
 
 	blit = [cbuf blitCommandEncoder];
 	[blit copyFromTexture:_texture
