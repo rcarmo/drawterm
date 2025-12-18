@@ -6,6 +6,9 @@
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <limits.h>
+#include <stdarg.h>
 #include <objc/runtime.h>
 #undef Rect
 
@@ -49,6 +52,21 @@ static AppDelegate *myApp;
 static DrawtermView *myview;
 static NSCursor *currentCursor;
 static NSString *ScaleDefaultsKey = @"DrawtermUIScale";
+static NSString *CpuHostDefaultsKey = @"DrawtermCpuHost";
+static NSString *CpuPortDefaultsKey = @"DrawtermCpuPort";
+static NSString *AuthHostDefaultsKey = @"DrawtermAuthHost";
+static NSString *AuthPortDefaultsKey = @"DrawtermAuthPort";
+static NSString *UserDefaultsKey = @"DrawtermUser";
+static NSString *PassDefaultsKey = @"DrawtermPass";
+static NSString *SavePassDefaultsKey = @"DrawtermSavePass";
+
+static inline NSString*
+trim(NSString *s)
+{
+	if(s == nil)
+		return @"";
+	return [s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
 
 static ulong pal[256];
 
@@ -588,6 +606,136 @@ mouseset(Point p)
 	}
 }
 
+- (void)openConnect:(id)sender
+{
+	NSUserDefaults *def = [NSUserDefaults standardUserDefaults];
+	NSString *cpuHost = [def stringForKey:CpuHostDefaultsKey] ?: @"192.168.1.226";
+	NSString *cpuPort = [def stringForKey:CpuPortDefaultsKey] ?: @"17019";
+	NSString *authHost = [def stringForKey:AuthHostDefaultsKey] ?: @"";
+	NSString *authPort = [def stringForKey:AuthPortDefaultsKey] ?: @"";
+	NSString *user = [def stringForKey:UserDefaultsKey] ?: @"glenda";
+	BOOL savePassFlag = [def boolForKey:SavePassDefaultsKey];
+	NSString *pass = savePassFlag ? ([def stringForKey:PassDefaultsKey] ?: @"") : @"";
+
+	NSAlert *alert = [NSAlert new];
+	[alert setMessageText:@"Connect to server"];
+	[alert setInformativeText:@"Enter CPU/auth addresses and user. Empty auth host will reuse CPU."];
+
+	CGFloat rowH = 28;
+	CGFloat gapY = 6;
+	CGFloat labelW = 90;
+	CGFloat fieldW = 220;
+	NSView *box = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 400, rowH * 6 + gapY * 5 + 12)];
+	NSTextField *cpuHostField = [[NSTextField alloc] initWithFrame:NSMakeRect(labelW + 20, rowH * 5 + gapY * 5, fieldW, 22)];
+	NSTextField *cpuPortField = [[NSTextField alloc] initWithFrame:NSMakeRect(labelW + 20, rowH * 4 + gapY * 4, 90, 22)];
+	NSTextField *authHostField = [[NSTextField alloc] initWithFrame:NSMakeRect(labelW + 20, rowH * 3 + gapY * 3, fieldW, 22)];
+	NSTextField *authPortField = [[NSTextField alloc] initWithFrame:NSMakeRect(labelW + 20, rowH * 2 + gapY * 2, 90, 22)];
+	NSTextField *userField = [[NSTextField alloc] initWithFrame:NSMakeRect(labelW + 20, rowH * 1 + gapY * 1, 160, 22)];
+	NSSecureTextField *passField = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(labelW + 20, rowH * 0 + gapY * 0, 180, 22)];
+	NSButton *savePass = [[NSButton alloc] initWithFrame:NSMakeRect(labelW + 210, rowH * 0 + gapY * 0 - 2, 140, 22)];
+
+	[cpuHostField setStringValue:cpuHost ?: @""];
+	[cpuPortField setStringValue:cpuPort ?: @""];
+	[authHostField setStringValue:authHost ?: @""];
+	[authPortField setStringValue:authPort ?: @""];
+	[userField setStringValue:user ?: @""];
+	[passField setStringValue:pass ?: @""];
+	[savePass setButtonType:NSSwitchButton];
+	[savePass setTitle:@"Save password"];
+	[savePass setState:savePassFlag ? NSControlStateValueOn : NSControlStateValueOff];
+
+	NSArray *labels = @[@"CPU host", @"CPU port", @"Auth host", @"Auth port", @"User", @"Password"];
+	NSArray *frames = @[
+		[NSValue valueWithRect:NSMakeRect(10, rowH * 5 + gapY * 5, labelW, 22)],
+		[NSValue valueWithRect:NSMakeRect(10, rowH * 4 + gapY * 4, labelW, 22)],
+		[NSValue valueWithRect:NSMakeRect(10, rowH * 3 + gapY * 3, labelW, 22)],
+		[NSValue valueWithRect:NSMakeRect(10, rowH * 2 + gapY * 2, labelW, 22)],
+		[NSValue valueWithRect:NSMakeRect(10, rowH * 1 + gapY * 1, labelW, 22)],
+		[NSValue valueWithRect:NSMakeRect(10, rowH * 0 + gapY * 0, labelW, 22)]
+	];
+	for(NSUInteger i = 0; i < labels.count; i++){
+		NSTextField *lbl = [NSTextField labelWithString:labels[i]];
+		[lbl setFrame:[frames[i] rectValue]];
+		[box addSubview:lbl];
+	}
+
+	[box addSubview:cpuHostField];
+	[box addSubview:cpuPortField];
+	[box addSubview:authHostField];
+	[box addSubview:authPortField];
+	[box addSubview:userField];
+	[box addSubview:passField];
+	[box addSubview:savePass];
+
+	[alert setAccessoryView:box];
+	[alert addButtonWithTitle:@"Connect"];
+	[alert addButtonWithTitle:@"Cancel"];
+
+	NSInteger resp = [alert runModal];
+	if(resp != NSAlertFirstButtonReturn)
+		return;
+
+	cpuHost = trim([cpuHostField stringValue]);
+	if(cpuHost.length == 0)
+		cpuHost = @"localhost";
+	cpuPort = trim([cpuPortField stringValue]);
+	if(cpuPort.length == 0)
+		cpuPort = @"17019";
+	authHost = trim([authHostField stringValue]);
+	authPort = trim([authPortField stringValue]);
+	user = trim([userField stringValue]);
+	if(user.length == 0)
+		user = @"glenda";
+	pass = [passField stringValue];
+
+	[def setObject:cpuHost forKey:CpuHostDefaultsKey];
+	[def setObject:cpuPort forKey:CpuPortDefaultsKey];
+	[def setObject:authHost forKey:AuthHostDefaultsKey];
+	[def setObject:authPort forKey:AuthPortDefaultsKey];
+	[def setObject:user forKey:UserDefaultsKey];
+	BOOL shouldSavePass = (savePass.state == NSControlStateValueOn);
+	[def setBool:shouldSavePass forKey:SavePassDefaultsKey];
+	if(shouldSavePass && pass.length)
+		[def setObject:pass forKey:PassDefaultsKey];
+	else
+		[def removeObjectForKey:PassDefaultsKey];
+	[def synchronize];
+
+	NSMutableArray<NSString *> *argv = [NSMutableArray array];
+	NSString *exe = [[NSBundle mainBundle] executablePath];
+	if(exe == nil || [exe length] == 0)
+		exe = [[NSProcessInfo processInfo] arguments][0];
+	char resolved[PATH_MAX];
+	if(realpath([exe UTF8String], resolved) != NULL)
+		exe = [NSString stringWithUTF8String:resolved];
+	[argv addObject:exe];
+	NSString *cpustr = [NSString stringWithFormat:@"tcp!%@!%@", cpuHost, cpuPort];
+	NSString *authstr;
+	NSString *authTarget = authHost.length ? authHost : cpuHost;
+	if(authPort.length)
+		authstr = [NSString stringWithFormat:@"tcp!%@!%@", authTarget, authPort];
+	else
+		authstr = [NSString stringWithFormat:@"tcp!%@", authTarget];
+	[argv addObjectsFromArray:@[@"-a", authstr]];
+	[argv addObjectsFromArray:@[@"-h", cpustr]];
+	[argv addObjectsFromArray:@[@"-u", user]];
+	if(pass.length)
+		setenv("PASS", [pass UTF8String], 1);
+	else
+		unsetenv("PASS");
+
+	int argc = (int)[argv count];
+	char **cargv = calloc(argc + 1, sizeof(char *));
+	for(int i = 0; i < argc; i++)
+		cargv[i] = strdup([[argv objectAtIndex:i] UTF8String]);
+	execv(cargv[0], cargv);
+	// If exec fails, clean up and report, then exit so we don’t hang.
+	for(int i = 0; i < argc; i++)
+		free(cargv[i]);
+	free(cargv);
+	_exit(1);
+}
+
 static void
 mainproc(void *aux)
 {
@@ -601,6 +749,7 @@ mainproc(void *aux)
 	NSMenu *sm = [NSMenu new];
 	[sm addItemWithTitle:@"Toggle Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"];
 	[sm addItemWithTitle:@"Hide" action:@selector(hide:) keyEquivalent:@"h"];
+	[sm addItemWithTitle:@"Connect…" action:@selector(openConnect:) keyEquivalent:@"o"];
 	[sm addItemWithTitle:@"Preferences…" action:@selector(openPreferences:) keyEquivalent:@","];
 	[sm addItemWithTitle:@"Quit" action:@selector(terminate:) keyEquivalent:@"q"];
 	NSMenu *m = [NSMenu new];
