@@ -568,6 +568,9 @@ mouseset(Point p)
 {
 	double detected = detectscale(self.window.backingScaleFactor);
 	NSAlert *alert = [NSAlert new];
+	NSImage *icon = [NSApp applicationIconImage];
+	if(icon)
+		[alert setIcon:icon];
 	[alert setMessageText:@"Interface Scale"];
 	[alert setInformativeText:[NSString stringWithFormat:@"Adjust UI size for HiDPI/Retina displays. Detected: %.2f", detected]];
 	NSSlider *slider = [NSSlider sliderWithValue:uiscale
@@ -742,13 +745,29 @@ mainproc(void *aux)
 	cpubody();
 }
 
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender
+{
+	if([sender mainWindow] == nil)
+		return NSTerminateNow;
+
+	NSAlert *alert = [[NSAlert alloc] init];
+	[alert setMessageText:@"Really quit drawterm?"];
+	[alert addButtonWithTitle:@"Yes"];
+	[alert addButtonWithTitle:@"Cancel"];
+	[alert setAlertStyle:NSAlertStyleCritical];
+	int choice = [alert runModal];
+	if(choice == NSAlertFirstButtonReturn)
+		return NSTerminateNow;
+	return NSTerminateCancel;
+}
+
 - (void) applicationDidFinishLaunching:(NSNotification *)aNotification
 {
 	LOG(@"BEGIN");
 
 	NSMenu *sm = [NSMenu new];
-	[sm addItemWithTitle:@"Toggle Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"];
-	[sm addItemWithTitle:@"Hide" action:@selector(hide:) keyEquivalent:@"h"];
+	[sm addItemWithTitle:@"Toggle Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"F"];
+	[sm addItemWithTitle:@"Hide" action:@selector(hide:) keyEquivalent:@"H"];
 	[sm addItemWithTitle:@"Connect…" action:@selector(openConnect:) keyEquivalent:@"o"];
 	[sm addItemWithTitle:@"Preferences…" action:@selector(openPreferences:) keyEquivalent:@","];
 	[sm addItemWithTitle:@"Quit" action:@selector(terminate:) keyEquivalent:@"q"];
@@ -994,11 +1013,13 @@ evkey(uint v)
 		}else
 			kbdkey(Kalt, 1);
 	}
-	if((x & NSEventModifierFlagCommand) != 0)
+	if((x & NSEventModifierFlagCommand) != 0){
 		if(u){
 			u |= 4;
 			[self sendmouse:u];
-		}
+		}else
+			kbdkey(Kmod4, 1);
+	}
 	if((x & ~_mods & NSEventModifierFlagCapsLock) != 0)
 		kbdkey(Kcaps, 1);
 	if((~x & _mods & NSEventModifierFlagShift) != 0)
@@ -1013,6 +1034,8 @@ evkey(uint v)
 			_breakcompose = NO;
 		}
 	}
+	if((~x & NSEventModifierFlagCommand) != 0)
+		kbdkey(Kmod4, 0);
 	if((~x & _mods & NSEventModifierFlagCapsLock) != 0)
 		kbdkey(Kcaps, 0);
 	_mods = x;
@@ -1030,6 +1053,10 @@ evkey(uint v)
 	if((_mods & NSEventModifierFlagOption) != 0){
 		kbdkey(Kalt, 0);
 		_mods ^= NSEventModifierFlagOption;
+	}
+	if((_mods & NSEventModifierFlagCommand) != 0){
+		kbdkey(Kmod4, 0);
+		_mods ^= NSEventModifierFlagCommand;
 	}
 }
 
