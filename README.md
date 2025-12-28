@@ -1,5 +1,7 @@
 # `drawterm` (dragged into the Liquid Glass era)
 
+![Glenda](glenda-t-256.png)
+
 ## Fork summary
 
 - HiDPI-friendly Cocoa backend: logical vs device scaling, fractional scale slider, and raw-pixel mode (scale 0).
@@ -9,6 +11,7 @@
 - macOS pasteboard bridge for text snarf/clipboard; getenv fixed to use host environment safely.
 - Cocoa "Connect…" dialog to set CPU/auth hosts and ports, user, and optional saved password; defaults persist between runs.
 - macOS shortcuts: Command now emits mod4 for rio/riow bindings; menu accelerators for Full Screen/Hide are Command+Shift+F/H; Command+Q shows a confirmation alert.
+- an icon that doesn't want to be unseen.
 
 ## Description
 
